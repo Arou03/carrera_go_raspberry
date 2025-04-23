@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['mario', 'yoshi']
+
+roboflow:
+  workspace: ter-fr3oz
+  project: carrera-go-mario-kart-go
+  version: 8
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/ter-fr3oz/carrera-go-mario-kart-go/dataset/8
