@@ -19,7 +19,6 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 from collections import deque
-from .fps_utils import calculate_fps, display_fps
 
 DEFAULT_MIN_AREA = 35000
 DEFAULT_RESIZE = (640, 640)

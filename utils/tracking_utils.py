@@ -13,10 +13,8 @@ Author: Manda Andriamaromanana
 import cv2
 import numpy as np
 from scipy.spatial.distance import cdist
-import torch
 import onnxruntime as ort
 import yaml
-from pathlib import Path
 
 
 def load_model(model_path):

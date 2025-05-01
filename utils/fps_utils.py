@@ -10,8 +10,6 @@ Functions include:
 
 Author: Manda Andriamaromanana
 """
-
-import time
 import cv2
 
 def calculate_fps(prev_time, current_time, fps_buffer):
