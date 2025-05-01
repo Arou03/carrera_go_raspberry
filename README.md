@@ -187,11 +187,12 @@ min_area: 35000                         # Minimum area to consider a contour as 
 
 ---
 
-## Author
+## Author  
 **Manda Andriamaromanana**  
 Université Paris-Saclay — Master 1 ISD  
 
-📫 Feel free to reach out for support, collaboration, or Raspberry Pi deployment help.
+### Acknowledgments  
+This project was supervised by **Steven Martin**, and I thank **Thomas Gerald** for his helpful guidance on how to get started.
 
 ---
 
