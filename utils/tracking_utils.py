@@ -10,6 +10,7 @@ Provides helper functions and classes to:
 Author: Manda Andriamaromanana
 """
 
+from collections import defaultdict, deque
 import cv2
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -159,6 +160,7 @@ class CentroidTracker:
         self.next_object_id = 0
         self.objects = {}  # object_id -> bbox
         self.max_distance = max_distance
+        self.tracks = defaultdict(lambda: deque(maxlen=5))
 
     def update(self, detections):
         """
@@ -180,6 +182,8 @@ class CentroidTracker:
         if len(self.objects) == 0:
             for det in detections:
                 self.objects[self.next_object_id] = det
+                center = self._center(det)
+                self.tracks[self.next_object_id].append(center)
                 self.next_object_id += 1
             return self.objects
 
@@ -205,6 +209,8 @@ class CentroidTracker:
                 continue
             object_id = object_ids[row]
             self.objects[object_id] = detections[col]
+            center = self._center(detections[col])
+            self.tracks[object_id].append(center)  # ✅ Track update here
             updated[object_id] = detections[col]
             used_rows.add(row)
             used_cols.add(col)
@@ -212,6 +218,8 @@ class CentroidTracker:
         for i, det in enumerate(detections):
             if i not in used_cols:
                 self.objects[self.next_object_id] = det
+                center = self._center(det)
+                self.tracks[self.next_object_id].append(center)  # ✅ Also for new objects
                 updated[self.next_object_id] = det
                 self.next_object_id += 1
 

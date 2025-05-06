@@ -1,3 +1,7 @@
+########################################
+# MODEL AND DATA CONFIGURATION
+########################################
+
 # Path to the ONNX model used for inference.
 # This file contains the trained neural network in ONNX format.
 # Example: "model/best.onnx" is a model trained to detect custom classes.
@@ -7,60 +11,84 @@ model_path: "model/best.onnx"
 # This file should follow YOLO format and contain a "names" field listing class names.
 # Example: 'data.yaml' might define: names: [ 'mario', 'yoshi' ]
 data_yaml_path: "carrera_go/data.yaml"
+target_class: "mario"
 
 # Target size (width = height) for resizing input frames before inference.
 # Must match the expected input of the ONNX model. Common YOLO sizes: 640, 416, etc.
-# Example: 640 means all frames will be resized to 640x640 pixels before processing.
 resize_size: 640
+
+########################################
+# DETECTION AND POST-PROCESSING
+########################################
 
 # Confidence threshold for filtering weak detections.
 # Only detections with confidence >= this threshold will be considered.
-# Example: 0.4 means only detections with at least 40% confidence will be used.
 conf_threshold: 0.4
 
 # IOU (Intersection Over Union) threshold used in Non-Maximum Suppression.
 # Determines how much overlap is allowed between two boxes before one is discarded.
-# Example: 0.5 means if two boxes overlap more than 50%, one will be suppressed.
 iou_threshold: 0.5
 
-# Number of past FPS measurements to keep in a buffer for averaging.
-# Helps stabilize FPS display and smooth out short-term fluctuations.
-# Example: 5 means use the last 5 FPS values to compute the displayed FPS.
-max_fps_window: 5
-
-# Alpha blending factor for displaying the dark track mask over the frame.
-# Controls the transparency of the green track overlay.
-# Range: 0 (fully transparent) to 1 (fully opaque).
-# Example: 0.4 means the overlay is 40% visible.
-mask_alpha: 0.4
-
-# Number of frames between updates of the merged track contours.
-# Frequent updates ensure accurate tracking, especially on a moving camera.
-# Example: 1 means update the contours every frame; 5 would update every 5 frames.
-contour_update_interval: 1
-
-# How often to send the object position data via HTTP (in frames).
-# Set to 0 to disable sending.
-# Example: 10 means send every 10 frames; 0 disables communication.
-send_interval: 0
+########################################
+# DARK AREA DETECTION AND SMOOTHING
+########################################
 
 # HSV upper bound for detecting "dark" regions on the track.
 # These values are in the HSV color space (Hue: 0–179, Saturation: 0–255, Value: 0–255).
-# Example: [179, 50, 90] filters out pixels that are relatively unsaturated and dark.
-# Used in combination with lower_black = [0, 0, 0] (hardcoded).
-upper_black: [179, 50, 90]
+# Example: [179, 100, 125] filters out dark, low-saturation pixels.
+# Lower bound is hardcoded as [0, 0, 0].
+upper_black: [179, 100, 100]
 
 # Number of previous dark masks to use when smoothing the current one.
 # Helps reduce noise by averaging past binary masks.
-# Example: 5 means the final dark area mask is averaged over the last 5 frames.
-dark_mask_history_length: 5
-
-# Distance threshold used to determine if an object is "on track".
-# Applied in cv2.pointPolygonTest: values > threshold mean inside contour.
-# Example: -1 means the center point must be strictly inside the track contour.
-dark_area_threshold: -1
+dark_mask_history_length: 10
 
 # Minimum area (in pixels) for a contour to be considered a valid dark area.
 # Filters out small noise or shadows.
-# Example: 35000 means contours smaller than 35,000 pixels are ignored.
 min_area: 35000
+
+# Distance threshold used to determine if an object is "on track".
+# Used with cv2.pointPolygonTest: values > threshold mean inside contour.
+# Example: -1 means the center point must be strictly inside the contour.
+dark_area_threshold: -1
+
+# Number of frames between updates of the merged track contours.
+# Example: 1 means update every frame; 5 means update every 5 frames.
+contour_update_interval: 1
+
+# Alpha blending factor for displaying the dark track mask over the frame.
+# Controls the transparency of the green overlay (0 = transparent, 1 = opaque).
+mask_alpha: 0.4
+
+########################################
+# OBJECT TRACKING AND MOVEMENT ANALYSIS
+########################################
+
+# Maximum allowed distance between centroids to consider same object (in pixels).
+# Used in CentroidTracker. Only needed if explicitly handled in tracker instantiation.
+tracker_max_distance: 50  # optional, add if not hardcoded
+
+# Velocity normalization factor.
+# Defines the speed value that corresponds to a full motion score of 1.0.
+speed_threshold: 1.0
+
+# Weight assigned to the dark area score when computing overall "on track" score.
+weight_dark: 0.101
+
+# Weight assigned to the motion score when computing overall "on track" score.
+weight_speed: 0.7
+
+# Minimum total score to classify an object as being "on track".
+# Score = weight_dark * dark_score + weight_speed * motion_score
+on_track_score_threshold: 0.599
+
+########################################
+# PERFORMANCE AND VISUALIZATION
+########################################
+
+# Number of past FPS measurements to average for display.
+max_fps_window: 5
+
+# How often to send object position data to a server (in frames).
+# 0 disables sending.
+send_interval: 0

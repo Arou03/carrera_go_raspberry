@@ -57,9 +57,9 @@ project/
 │   ├── dark_area_utils.py      # Track detection using dark areas
 │   ├── fps_utils.py            # FPS display and smoothing
 │   └── utils_send_info.py      # HTTP sender for inference metadata
-├── videos/
-│   └── sample1.mp4             # Test video example
-└── video_test/                 # Optional directory for testing
+└── video_test/
+    └── sample1.mp4             # Test video example
+
 ```
 
 ---
@@ -100,7 +100,7 @@ tracked_objects = tracker.update(detections)
 
 ### On-Track Check
 ```python
-is_on = is_on_track(bbox, final_mask)
+is_on = is_on_track(bbox, final_mask, velocity=..., w_dark=..., w_speed=...)
 ```
 
 ### Display
@@ -161,6 +161,11 @@ send_interval: 0                        # 0 disables HTTP sending, else send eve
 dark_area_threshold: -1                # Point-in-contour threshold for on-track detection
 upper_black: [179, 50, 90]             # HSV values to define black/dark regions
 min_area: 35000                         # Minimum area to consider a contour as part of the track
+target_class: "mario"                  # Class to apply the on-track logic (e.g., "mario")
+weight_dark: 0.101                     # Importance of proximity to dark zone
+weight_speed: 0.7                      # Importance of speed (motion)
+on_track_score_threshold: 0.599        # Score above which object is "on track"
+tracker_max_distance: 50               # Used to avoid class mixups by using separate trackers
 ```
 
 ---
