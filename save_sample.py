@@ -1,32 +1,3 @@
-"""
-main.py - Real-Time Object Tracking and Dark Area Detection
-
-This script performs object detection and tracking on a video stream (either from a webcam or a test video file).
-It also detects dark zones in the video using HSV masking and overlays the results. A YOLOv5 model in ONNX format
-is used for object detection, and the results are tracked using a centroid-based tracker. Additional information
-such as whether an object is on track (inside a dark zone) is calculated, and data can optionally be sent to
-an external server.
-
-Usage:
-    python main.py [--config CONFIG_PATH] [--show] [--send N] [--test]
-
-Arguments:
-    --config     Path to YAML config file with parameters (default: config.yaml)
-    --show       Display the video feed with overlays in a window
-    --send       Interval (in frames) for sending tracking data to server (0 disables)
-    --test       Use test video instead of webcam
-
-Dependencies:
-    - OpenCV
-    - PyTorch
-    - ONNX Runtime
-    - NumPy
-    - YAML
-    - Custom modules: yolo_utils, dark_area_utils, tracking_utils, fps_utils, utils_send_info
-
-Author: Manda Andriamaromanana
-"""
-
 import sys
 import cv2
 import torch
@@ -34,6 +5,7 @@ import time
 import argparse
 import numpy as np
 import yaml
+import re
 from pathlib import Path
 from collections import deque, defaultdict
 
@@ -42,7 +14,6 @@ sys.path.append(str(YOLOV5_PATH))
 
 from utils.utils_send_info import send_position_http
 from utils.post_processing_utils import non_max_suppression, scale_boxes
-
 from utils.dark_area_utils import (
     get_dark_mask, overlay_mask, merge_contours_by_distance
 )
@@ -51,121 +22,32 @@ from utils.tracking_utils import (
 )
 from utils.fps_utils import calculate_fps, display_fps
 
-fps_buffer = None
-dark_mask_history = None
-
 def load_config(config_path="config.yaml"):
-    """
-    Load configuration from a YAML file.
-
-    Parameters
-    ----------
-    config_path : str
-        Path to the YAML config file.
-
-    Returns
-    -------
-    dict
-        Configuration parameters as a dictionary.
-    """
     with open(config_path, "r") as file:
         return yaml.safe_load(file)
 
-def is_on_track(
-    object_bbox,
-    final_mask,
-    threshold=-2,
-    velocity=None,
-    w_dark=0.5,
-    w_speed=0.5,
-    speed_threshold=1.0,
-    score_threshold=0.5
-):
-    """
-    Assess whether an object is considered 'on track' based on a weighted combination of
-    its spatial location (distance to dark zone contours) and its motion (speed).
-
-    The function computes two normalized scores:
-    - `dark_score`: Based on the distance from the object's center to the nearest contour
-      of a dark zone. Higher if deeper inside, lower if near the edge or outside.
-    - `motion_score`: Based on the speed of the object relative to a speed threshold.
-
-    The final decision is based on a weighted sum of these scores compared to a global
-    `score_threshold`.
-
-    Parameters
-    ----------
-    object_bbox : list[int]
-        Bounding box coordinates as [x1, y1, x2, y2].
-    final_mask : np.ndarray
-        Binary mask (0 or 255) representing the current dark zones.
-    threshold : float, optional
-        Unused in this version but preserved for compatibility (default: -2).
-    velocity : tuple[float, float], optional
-        Velocity vector (dx, dy) representing object movement between frames.
-    w_dark : float, optional
-        Weight assigned to the dark area score (default: 0.5).
-    w_speed : float, optional
-        Weight assigned to the motion score (default: 0.5).
-    speed_threshold : float, optional
-        Speed value that corresponds to a maximum motion score of 1.0 (default: 1.0).
-    score_threshold : float, optional
-        Minimum combined score required to consider the object 'on track' (default: 0.5).
-
-    Returns
-    -------
-    bool
-        True if the weighted score exceeds or equals the `score_threshold`, otherwise False.
-
-    Notes
-    -----
-    - The function assumes that a higher motion score can compensate for being outside the
-      dark area, and vice versa, depending on the chosen weights.
-    - If no velocity is provided, motion_score is set to 0.
-    - You can tune `w_dark`, `w_speed`, and `score_threshold` to control sensitivity.
-
-    Example
-    -------
-    >>> is_on_track([100, 100, 120, 120], mask, velocity=(3, 2),
-    ...             w_dark=0.7, w_speed=0.3, score_threshold=0.6)
-    True
-    """
-
+def is_on_track(object_bbox, final_mask, threshold=-2, velocity=None,
+                w_dark=0.5, w_speed=0.5, speed_threshold=1.0, score_threshold=0.5):
     x1, y1, x2, y2 = object_bbox
     object_center = (int((x1 + x2) / 2), int((y1 + y2) / 2))
-
-    # Find distance to nearest contour (positive if inside, negative if outside)
     contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     max_dist = float('-inf')
     for contour in contours:
         dist = cv2.pointPolygonTest(contour, object_center, measureDist=True)
         max_dist = max(max_dist, dist)
 
-    # Normalize dark score: inside = 1, near edge = 0.5, outside = 0
     dark_score_max_dist = 10
-
-    if max_dist >= 0:
-        dark_score = min(max_dist / dark_score_max_dist, 1.0)
-    else:
-        dark_score = max(max_dist / dark_score_max_dist, -1.0)
-
-    # Motion score: normalized between 0 and 1
+    dark_score = min(max_dist / dark_score_max_dist, 1.0) if max_dist >= 0 else max(max_dist / dark_score_max_dist, -1.0)
     motion_score = 0.0
     if velocity is not None:
         speed = (velocity[0]**2 + velocity[1]**2)**0.5
         motion_score = min(speed / speed_threshold, 1.0)
 
-    # Weighted combination
     score = w_dark * dark_score + w_speed * motion_score
-    # print(f'score = {score} ; dark = {dark_score} ; motion = {motion_score}')
     return score >= score_threshold
 
 
 def main(config, show_window=False, frame_skip=0):
-    """
-    Run the main loop for object detection, tracking, and visualization.
-    Only applies "on track" logic to the specified target class.
-    """
     resize_size = config['resize_size']
     conf_threshold = config['conf_threshold']
     iou_threshold = config['iou_threshold']
@@ -179,17 +61,17 @@ def main(config, show_window=False, frame_skip=0):
     min_area = config.get('min_area', 10000)
     dark_score_max_dist = config.get('dark_score_max_distance', 20.0)
 
-    # Load class labels and determine the target class ID
     class_names = load_class_names(config["data_yaml_path"])
     target_class = config.get("target_class", None)
     target_class_id = class_names.index(target_class) if target_class in class_names else None
 
     fps_buffer = deque(maxlen=max_fps_window)
     dark_mask_history = deque(maxlen=dark_mask_history_length)
-    trackers = {} # CentroidTracker(max_distance=config.get('tracker_max_distance', 50))
+    trackers = {}
     model = load_model(config['model_path'])
 
-    video_source = 'video_test/sample1.mp4' if config.get("use_test_video") else 0
+    use_test_video = config.get("use_test_video", False)
+    video_source = 'video_test/sample1.mp4' if use_test_video else 0
     cap = cv2.VideoCapture(video_source)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, resize_size)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resize_size)
@@ -206,6 +88,18 @@ def main(config, show_window=False, frame_skip=0):
     scale_x = frame_resized_first.shape[1] / resize_size
     scale_y = frame_resized_first.shape[0] / resize_size
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    # 🎥 Create VideoWriter if test mode
+    out_writer = None
+    if use_test_video:
+        results_dir = Path("test_results")
+        results_dir.mkdir(exist_ok=True)
+        existing = list(results_dir.glob("test_result_*.mp4"))
+        indices = [int(re.findall(r"(\d{3})", f.stem)[0]) for f in existing if re.findall(r"(\d{3})", f.stem)]
+        next_index = max(indices) + 1 if indices else 0
+        output_path = results_dir / f"test_result_{next_index:03d}.mp4"
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out_writer = cv2.VideoWriter(str(output_path), fourcc, 30.0, (resize_size, resize_size))
 
     frame_count = 0
     total_fps = 0
@@ -226,17 +120,15 @@ def main(config, show_window=False, frame_skip=0):
         t1 = time.perf_counter()
         timing_data["frame_acquisition"] += t1 - t0
 
-        # Dark area detection and smoothing
+        # Dark zone
         t0 = time.perf_counter()
         raw_mask, contours = get_dark_mask(frame_resized, min_area=min_area, upper_black=upper_black)
         dark_mask_history.append(raw_mask)
         avg_mask = np.mean(dark_mask_history, axis=0).astype(np.uint8)
         _, avg_mask = cv2.threshold(avg_mask, 127, 255, cv2.THRESH_BINARY)
-
         if frame_count % contour_update_interval == 0:
             contours, _ = cv2.findContours(avg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             merged_contours = merge_contours_by_distance(contours)
-
         final_mask.fill(0)
         if merged_contours:
             for contour in merged_contours:
@@ -244,7 +136,7 @@ def main(config, show_window=False, frame_skip=0):
         t1 = time.perf_counter()
         timing_data["dark_area_processing"] += t1 - t0
 
-        # Object detection
+        # Detection
         t0 = time.perf_counter()
         img_numpy = prepare_image(frame_resized, size=resize_size)
         preds_raw = onnx_inference(model, img_numpy)
@@ -252,9 +144,8 @@ def main(config, show_window=False, frame_skip=0):
         t1 = time.perf_counter()
         timing_data["yolo_inference"] += t1 - t0
 
-        # Object tracking
+        # Tracking
         t0 = time.perf_counter()
-        detection_classes = []  # parallel list
         detections_by_class = defaultdict(list)
         for det in preds:
             if det is not None and len(det):
@@ -266,19 +157,15 @@ def main(config, show_window=False, frame_skip=0):
                     ]
                     class_id = int(cls)
                     detections_by_class[class_id].append(bbox)
-                    detection_classes.append(int(cls))  # used later for labeling
-
-        tracked_objects = {}  # class_id -> {object_id -> bbox}
+        tracked_objects = {}
         for class_id, detections in detections_by_class.items():
             if class_id not in trackers:
                 trackers[class_id] = CentroidTracker(max_distance=config.get('tracker_max_distance', 50))
-            tracked = trackers[class_id].update(detections)
-            tracked_objects[class_id] = tracked
-
+            tracked_objects[class_id] = trackers[class_id].update(detections)
         t1 = time.perf_counter()
         timing_data["tracking_update"] += t1 - t0
 
-        # Annotation and optional data sending
+        # Annotations
         for class_id, objects in tracked_objects.items():
             class_name = class_names[class_id]
             for object_id, bbox in objects.items():
@@ -291,9 +178,7 @@ def main(config, show_window=False, frame_skip=0):
 
                 if target_class_id is not None and class_id == target_class_id:
                     is_on = is_on_track(
-                        bbox,
-                        final_mask,
-                        velocity=velocity,
+                        bbox, final_mask, velocity=velocity,
                         w_dark=config.get("weight_dark", 0.5),
                         w_speed=config.get("weight_speed", 0.5),
                         speed_threshold=config.get("speed_threshold", 1.0),
@@ -307,24 +192,24 @@ def main(config, show_window=False, frame_skip=0):
                     label = f"{class_name}"
 
                 draw_box_label(frame_resized, bbox, label, color=color)
-
                 if is_on is not None and send_interval > 0:
                     send_count += 1
                     if send_count % send_interval == 0:
                         center = ((bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2)
                         send_position_http("http://localhost:5000/track", center, is_on, frame_id=frame_count)
 
-        # FPS calc
+        # FPS & display
         t0 = time.perf_counter()
         current_time = time.time()
         avg_fps, prev_time = calculate_fps(prev_time, current_time, fps_buffer)
         t1 = time.perf_counter()
         timing_data["fps_calc"] += t1 - t0
 
-        # Final overlay
         overlayed = overlay_mask(frame_resized.copy(), final_mask, alpha=mask_alpha)
         final_frame = display_fps(overlayed, avg_fps)
 
+        if out_writer:
+            out_writer.write(final_frame)
         if show_window:
             cv2.imshow("Tracking + Dark Zone", final_frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -334,6 +219,8 @@ def main(config, show_window=False, frame_skip=0):
         frame_count += 1
 
     cap.release()
+    if out_writer:
+        out_writer.release()
     cv2.destroyAllWindows()
 
     if frame_count > 0:
@@ -353,4 +240,3 @@ if __name__ == "__main__":
     config = load_config(args.config)
     config["use_test_video"] = args.test
     main(config, show_window=args.show, frame_skip=args.skip)
-
